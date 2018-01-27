@@ -61,8 +61,7 @@ init([Name, Mod, Fun, Size, Time, Policy]) when is_atom(Mod), is_atom(Fun), is_a
 init(#cache{size = unlimited} = State) -> {ok, State};
 init(#cache{name = Name, size = Size} = State) when is_integer(Size), Size > 0 ->
     SizeBytes = Size * (1024 * 1024),
-    {ok, Reaper} = ecache_reaper:start(Name, SizeBytes),
-    {ok, State#cache{reaper = erlang:monitor(process, Reaper), size = SizeBytes}}.
+    {ok, State#cache{reaper = start_reaper(Name, SizeBytes), size = SizeBytes}}.
 
 handle_call({get, Key} = R, From, #cache{data_module = M, data_accessor = F} = State) ->
     generic_get(R, From, State, key(Key), M, F, Key);
@@ -125,8 +124,7 @@ handle_cast({generic_dirty, M, F, A}, #cache{datum_index = Index} = State) ->
 
 handle_info({destroy,_DatumPid, ok}, State) -> {noreply, State};
 handle_info({'DOWN', _Ref, process, Reaper, _Reason}, #cache{reaper = Reaper, name = Name, size = Size} = State) ->
-    {NewReaper, _Mon} = ecache_reaper:start_link(Name, Size),
-    {noreply, State#cache{reaper = NewReaper}};
+    {noreply, State#cache{reaper = start_reaper(Name, Size)}};
 handle_info({'DOWN', _Ref, process, _Pid, _Reason}, State) -> {noreply, State};
 handle_info(Info, State) ->
     error_logger:info_report("Other info of: ~p~n", [Info]),
@@ -260,3 +258,8 @@ generic_get(R, From, #cache{datum_index = Index} = State, UseKey, M, F, Key) ->
             spawn(gen_server, cast, [P, found]),
             {reply, Data, State}
     end.
+
+start_reaper(Name, Size) ->
+    {ok, Reaper} = ecache_reaper:start(Name, Size),
+    monitor(process, Reaper),
+    Reaper.
