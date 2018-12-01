@@ -177,18 +177,22 @@ create_datum(DatumKey, Data, TTL, Type) ->
     #datum{key = DatumKey, data = Data, type = Type,
            started = Timestamp, ttl = TTL, remaining_ttl = TTL, last_active = Timestamp}.
 
-reap_after(Index, Key, LifeTTL) ->
+reap_after(Index, Key, TTL) ->
     receive
         {update_ttl, NewTTL} -> reap_after(Index, Key, NewTTL)
-    after LifeTTL -> ets:delete(Index, Key)
+    after TTL -> ets:delete(Index, Key)
     end.
+
+-compile({inline, [start_reaper/3]}).
+start_reaper(Index, Key, TTL) ->
+    spawn(fun() ->
+              link(ets:info(Index, owner)),
+              reap_after(Index, Key, TTL)
+          end).
 
 launch_datum_ttl_reaper(_, _, #datum{remaining_ttl = unlimited} = Datum) -> Datum;
 launch_datum_ttl_reaper(Index, Key, #datum{remaining_ttl = TTL} = Datum) ->
-    Datum#datum{reaper = spawn(fun() ->
-                                   link(ets:info(Index, owner)),
-                                   reap_after(Index, Key, TTL)
-                               end)}.
+    Datum#datum{reaper = start_reaper(Index, Key, TTL)}.
 
 -compile({inline, [datum_error/2]}).
 datum_error(How, What) -> {ecache_datum_error, {How, What}}.
