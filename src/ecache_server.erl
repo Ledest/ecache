@@ -23,7 +23,7 @@
                 mgr, % ???
                 data :: term(),
                 started :: integer(),
-                reaper :: undefined|pid(),
+                reaper :: undefined|reference(),
                 last_active :: integer(),
                 ttl = unlimited:: unlimited|non_neg_integer(),
                 type = mru :: mru|actual_time,
@@ -126,6 +126,9 @@ handle_cast(Req, State) ->
     error_logger:warning_msg("Other cast of: ~p~n", [Req]),
     {noreply, State}.
 
+handle_info({timeout, R, {Index, Key}}, State) when is_reference(R) ->
+    ets:match_delete(Index, #datum{key = Key, reaper = R, _ = '_'}),
+    {noreply, State};
 handle_info({destroy, _DatumPid, ok}, State) -> {noreply, State};
 handle_info({'EXIT', Pid, _Reason}, #cache{reaper = Pid, name = Name, size = Size} = State) ->
     {noreply, State#cache{reaper = start_reaper(Name, Size)}};
@@ -177,18 +180,8 @@ create_datum(DatumKey, Data, TTL, Type) ->
     #datum{key = DatumKey, data = Data, type = Type,
            started = Timestamp, ttl = TTL, remaining_ttl = TTL, last_active = Timestamp}.
 
-reap_after(Index, Key, TTL) ->
-    receive
-        {update_ttl, NewTTL} -> reap_after(Index, Key, NewTTL)
-    after TTL -> ets:delete(Index, Key)
-    end.
-
 -compile({inline, [start_reaper/3]}).
-start_reaper(Index, Key, TTL) ->
-    spawn(fun() ->
-              link(ets:info(Index, owner)),
-              reap_after(Index, Key, TTL)
-          end).
+start_reaper(Index, Key, TTL) -> erlang:start_timer(TTL, ets:info(Index, owner), {Index, Key}).
 
 launch_datum_ttl_reaper(_, _, #datum{remaining_ttl = unlimited} = Datum) -> Datum;
 launch_datum_ttl_reaper(Index, Key, #datum{remaining_ttl = TTL} = Datum) ->
@@ -206,9 +199,9 @@ launch_datum(Key, Index, Module, Accessor, TTL, Policy, UseKey) ->
         How:What -> datum_error({How, What}, erlang:get_stacktrace())
     end.
 
--compile({inline, [ping_reaper/2]}).
-ping_reaper(Reaper, NewTTL) when is_pid(Reaper) -> Reaper ! {update_ttl, NewTTL};
-ping_reaper(_, _) -> ok.
+ping_reaper(Index, Key, TTL, Reaper) when is_reference(Reaper) ->
+    erlang:cancel_timer(Reaper),
+    start_reaper(Index, Key, TTL).
 
 update_ttl(Index, #datum{key = Key, ttl = unlimited}) ->
     ets:update_element(Index, Key, {#datum.last_active, timestamp()});
@@ -220,11 +213,12 @@ update_ttl(Index, #datum{key = Key, started = Started, ttl = TTL, type = actual_
                        StartedNowDiff when StartedNowDiff < TTL -> TTL - StartedNowDiff;
                        _ -> 0
                    end,
-    ping_reaper(Reaper, TTLRemaining),
-    ets:update_element(Index, Key, [{#datum.last_active, Timestamp}, {#datum.remaining_ttl, TTLRemaining}]);
+    ets:update_element(Index, Key,
+                       [{#datum.reaper, ping_reaper(Index, Key, TTLRemaining, Reaper)},
+                        {#datum.last_active, Timestamp}, {#datum.remaining_ttl, TTLRemaining}]);
 update_ttl(Index, #datum{key = Key, ttl = TTL, reaper = Reaper}) ->
-    ping_reaper(Reaper, TTL),
-    ets:update_element(Index, Key, {#datum.last_active, timestamp()}).
+    ets:update_element(Index, Key,
+                       [{#datum.reaper, ping_reaper(Index, Key, TTL, Reaper)}, {#datum.last_active, timestamp()}]).
 
 fetch_data(Key, Index) when is_tuple(Key) ->
     case ets:lookup(Index, Key) of
@@ -248,13 +242,12 @@ generic_get(UseKey, From, #cache{datum_index = Index} = State, M, F, Key) ->
         {ok, _} = R -> {reply, R, State#cache{found = State#cache.found + 1}};
         {ecache, notfound} ->
             #cache{ttl = TTL, policy = Policy} = State,
-            P = self(),
             ets:insert_new(Index,
                            #datum{key = UseKey,
                                   mgr = spawn(fun() ->
                                                   R = case launch_datum(Key, Index, M, F, TTL, Policy, UseKey) of
                                                           {ok, _} = Data ->
-                                                              gen_server:cast(P, launched),
+                                                              gen_server:cast(ets:info(Index, owner), launched),
                                                               Data;
                                                           Error ->
                                                                ets:delete(Index, UseKey),
@@ -277,7 +270,8 @@ time_diff(T2, T1) -> T2 - T1.
 -compile({inline, [time_diff/2]}).
 
 kill_reapers(Index) ->
-    lists:foreach(fun kill_reaper/1, ets:select(Index, [{#datum{reaper = '$1', _ = '_'}, [], ['$1']}])).
+    lists:foreach(fun erlang:cancel_timer/1,
+                  ets:select(Index, [{#datum{reaper = '$1', _ = '_'}, [{is_reference, '$1'}], ['$1']}])).
 -compile({inline, [kill_reapers/1]}).
 
-kill_reaper(Reaper) -> not is_pid(Reaper) orelse exit(Reaper, kill).
+kill_reaper(Reaper) -> not is_reference(Reaper) orelse erlang:cancel_timer(Reaper).
