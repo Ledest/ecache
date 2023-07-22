@@ -3,3 +3,5 @@
 tags
 /.eunit
 /doc
+/_build
+/rebar.lock
