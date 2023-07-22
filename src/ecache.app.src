@@ -1,6 +1,8 @@
 {application, ecache, [{description, "ecache - Erlang ETS Based Cache"},
                        {vsn, "2.14.0"},
-                       {modules, []},
                        {registered, []},
                        {applications, [kernel, stdlib]},
-                       {env, []}]}.
+                       {modules, []},
+                       {env, []},
+                       {links, [{"GitHub", "https://github.com/Ledest/ecache"}]},
+                       {licenses, ["Apache-2.0"]}]}.
