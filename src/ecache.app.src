@@ -6,5 +6,5 @@
                        {env, []},
                        {links, [{"GitHub", "https://github.com/Ledest/ecache"}]},
                        {licenses, ["Apache-2.0"]},
-                       {build_tools, [rebar, rebar3]},
+                       {build_tools, [rebar, rebar3, make]},
                        {exclude_patterns, ["rebar.lock"]}]}.
