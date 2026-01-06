@@ -32,7 +32,7 @@ ebin/:
 	mkdir ebin
 
 doc/edoc-info: $(SOURCES)
-	$(ERL) -noshell -eval "edoc:application('.', [$(EDOC_OPTS)])." -s init stop
+	$(ERL) -noshell -eval 'edoc:application($(NAME), ".", [$(EDOC_OPTS)]).' -s init stop
 
 $(EUNIT_MODULES): $(SOURCES) $(TEST_SOURCES) .eunit/
 	$(ERLC) -o .eunit $(ERLC_OPTS) $(ERLC_DEFS) -DTEST $(SOURCES) $(TEST_SOURCES)
